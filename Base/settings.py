@@ -87,11 +87,14 @@ WSGI_APPLICATION = "Base.wsgi.application"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 DATABASES = {
-    'default': dj_database_url.config(
-        default=os.getenv("DATABASE_URL"),
-        conn_max_age=600,
-        ssl_require=True
-    )
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "postgres",
+        "USER": "postgres",
+        "PASSWORD": "your_supabase_password",
+        "HOST": "db.abcd1234.supabase.co",
+        "PORT": "5432",
+    }
 }
 
 REST_FRAMEWORK = {
