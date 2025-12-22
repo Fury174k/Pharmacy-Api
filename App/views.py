@@ -16,6 +16,7 @@ from .utils.csv_importer import import_products_from_csv
 
 @api_view(['POST'])
 @parser_classes([MultiPartParser])
+@permission_classes([IsAuthenticated])
 def import_csv(request):
     file = request.FILES.get('file')
     if not file:
