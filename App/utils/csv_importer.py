@@ -13,7 +13,7 @@ def match_field(header_name):
             return field
     return None  # Unrecognized column
 
-def import_products_from_csv(file):
+def import_products_from_csv(file, user):
     decoded_file = file.read().decode('utf-8').splitlines()
 
     if not decoded_file or len(decoded_file) < 2:
@@ -56,7 +56,7 @@ def import_products_from_csv(file):
             continue
 
         try:
-            product = Product.objects.create(**product_data)
+            product = Product.objects.create(**product_data, user=user)
             created.append(product)
         except Exception as e:
             errors.append(f"Row {row_index}: {str(e)}")
