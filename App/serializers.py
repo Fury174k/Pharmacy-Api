@@ -12,15 +12,13 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'password', 'pharmacy_name', 'license_number']
+        fields = ['id', 'username', 'email', 'password']
 
     def create(self, validated_data):
         user = User.objects.create_user(
             username=validated_data['username'],
             email=validated_data.get('email', ''),
             password=validated_data['password'],
-            pharmacy_name=validated_data.get('pharmacy_name', ''),
-            license_number=validated_data.get('license_number', '')
         )
         Token.objects.create(user=user)
         return user
