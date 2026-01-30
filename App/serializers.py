@@ -12,15 +12,13 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'password', 'pharmacy_name', 'license_number']
+        fields = ['id', 'username', 'email', 'password']
 
     def create(self, validated_data):
         user = User.objects.create_user(
             username=validated_data['username'],
             email=validated_data.get('email', ''),
             password=validated_data['password'],
-            pharmacy_name=validated_data.get('pharmacy_name', ''),
-            license_number=validated_data.get('license_number', '')
         )
         Token.objects.create(user=user)
         return user
@@ -39,12 +37,28 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def validate_sku(self, value):
         qs = Product.objects.filter(sku=value)
-        # When updating, allow the same SKU for the same instance
         if getattr(self, 'instance', None):
             qs = qs.exclude(pk=self.instance.pk)
         if qs.exists():
             raise serializers.ValidationError("SKU already exists. Try a different one.")
         return value
+
+    def validate(self, data):
+        """
+        Volatile products:
+        - Do NOT track stock
+        - Do NOT use reorder levels
+        """
+        is_volatile = data.get(
+            'is_volatile',
+            getattr(self.instance, 'is_volatile', False)
+        )
+
+        if is_volatile:
+            data['stock'] = 0
+            data['reorder_level'] = 0
+
+        return data
 
 
 class StockMovementSerializer(serializers.ModelSerializer):
@@ -69,74 +83,93 @@ class StockMovementSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['performed_by', 'resulting_stock', 'timestamp', 'movement_type']
 
-class SaleItemSerializer(serializers.ModelSerializer):
-    # subtotal is computed server-side when creating a Sale; clients should not be required to provide it
-    subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
-
+class SaleItemCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = SaleItem
-        fields = ['product', 'quantity', 'unit_price', 'subtotal']
+        fields = ['product', 'quantity', 'unit_price']
+
+    def validate(self, data):
+        product = data['product']
+        quantity = data['quantity']
+        unit_price = data.get('unit_price')
+
+        if quantity <= 0:
+            raise serializers.ValidationError("Quantity must be greater than zero.")
+
+        # Volatile items → price must be provided, stock ignored
+        if product.is_volatile:
+            if unit_price is None:
+                raise serializers.ValidationError(
+                    f"Unit price is required for volatile product '{product.name}'."
+                )
+        else:
+            # Non-volatile → enforce stock
+            if not product.can_deduct(quantity):
+                raise serializers.ValidationError(
+                    f"Insufficient stock for '{product.name}'."
+                )
+
+            # Lock price if client didn't pass one
+            if unit_price is None:
+                data['unit_price'] = product.unit_price
+
+        return data
 
 
 class SaleSerializer(serializers.ModelSerializer):
-    items = SaleItemSerializer(many=True)
+    items = SaleItemCreateSerializer(many=True)
 
     class Meta:
         model = Sale
-        fields = ['id', 'sold_by', 'total_amount', 'timestamp', 'items']
-        read_only_fields = ['sold_by', 'timestamp', 'total_amount']
+        fields = ['id', 'total_amount', 'timestamp', 'items']
+        read_only_fields = ['id', 'total_amount', 'timestamp']
 
+    @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         user = self.context['request'].user
 
-        print(f"=== SaleSerializer.create called ===")
-        print(f"User: {user}")
-        print(f"Items count: {len(items_data)}")
+        if not items_data:
+            raise serializers.ValidationError("A sale must contain at least one item.")
 
-        with transaction.atomic():
-            sale = Sale.objects.create(sold_by=user)
-            total = Decimal('0.00')
+        sale = Sale.objects.create(
+            sold_by=user,
+            total_amount=Decimal('0.00')
+        )
 
-            for item_data in items_data:
-                product = item_data['product']
-                qty = item_data['quantity']
-                price = item_data['unit_price']
-                subtotal = Decimal(qty) * price
-                total += subtotal
+        total = Decimal('0.00')
 
-                print(f"Processing item: {product.name}")
-                print(f"  Stock before: {product.stock}")
-                print(f"  Quantity to deduct: {qty}")
-                print(f"  Reorder level: {product.reorder_level}")
+        for item in items_data:
+            product = item['product']
+            quantity = item['quantity']
+            unit_price = Decimal(item['unit_price'])
 
-                # Deduct stock
-                product.adjust_stock(-qty, by_user=user, reason="sale")
-                
-                # Refresh to see new stock
-                product.refresh_from_db()
-                print(f"  Stock after: {product.stock}")
-                print(f"  Should trigger alert? {product.stock <= product.reorder_level}")
+            subtotal = unit_price * Decimal(quantity)
 
-                # Create SaleItem record
-                SaleItem.objects.create(
-                    sale=sale,
-                    product=product,
-                    quantity=qty,
-                    unit_price=price,
-                    subtotal=subtotal,
+            SaleItem.objects.create(
+                sale=sale,
+                product=product,
+                quantity=quantity,
+                unit_price=unit_price,
+                subtotal=subtotal
+            )
+
+            # Deduct stock ONLY for non-volatile products
+            if not product.is_volatile:
+                product.adjust_stock(
+                    qty_delta=-quantity,
+                    by_user=user,
+                    reason=f"Sale #{sale.id}",
+                    movement_type='SALE'
                 )
 
-            sale.total_amount = total
-            sale.save()
-            
-        print(f"Sale completed. Total: {total}")
-        
-        # Check alerts after sale
-        alerts_count = Alert.objects.filter(created_for=user, acknowledged=False).count()
-        print(f"Alerts for {user.username}: {alerts_count}")
-        
+            total += subtotal
+
+        sale.total_amount = total
+        sale.save(update_fields=['total_amount'])
+
         return sale
+
 
 class LowStockAlertSerializer(serializers.ModelSerializer):
     product = ProductSerializer(read_only=True)

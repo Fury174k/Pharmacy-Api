@@ -15,6 +15,7 @@ from .utils.csv_importer import import_products_from_csv
 
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser])
 def import_csv(request):
     file = request.FILES.get('file')
@@ -82,62 +83,56 @@ class ProductRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
 class StockMovementCreateView(generics.ListCreateAPIView):
     serializer_class = StockMovementSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        # Show movements for products owned by this user OR movements performed by this user
         return StockMovement.objects.filter(
-            Q(product__user=self.request.user) | 
-            Q(performed_by=self.request.user)
-        ).select_related('product', 'performed_by')
+            product__user=self.request.user
+        ).select_related('product')
 
     @transaction.atomic
     def perform_create(self, serializer):
         product = serializer.validated_data['product']
         delta = serializer.validated_data['delta']
-        reason = serializer.validated_data.get('reason', '')
+        reason = serializer.validated_data.get('reason')
 
         if product.user != self.request.user:
             raise PermissionError("You do not own this product.")
 
-        # Use product.adjust_stock which handles the StockMovement creation
+        if product.is_volatile:
+            raise ValueError("Stock movements are not allowed for volatile products.")
+
         product.adjust_stock(
             qty_delta=delta,
             by_user=self.request.user,
             reason=reason,
             movement_type='RESTOCK' if delta > 0 else 'ADJUSTMENT'
         )
-    @transaction.atomic
-    def perform_create(self, serializer):
-        product = serializer.validated_data['product']
-        delta = serializer.validated_data['delta']
-        reason = serializer.validated_data.get('reason', '')
 
-        if product.user and product.user != self.request.user:
-            raise PermissionError("You do not own this product.")
-
-        # Use product.adjust_stock which handles the StockMovement creation
-        # Pass the logged-in user so they receive alerts
-        product.adjust_stock(
-            qty_delta=delta,
-            by_user=self.request.user,  # This ensures alerts go to the user making the change
-            reason=reason,
-            movement_type='RESTOCK' if delta > 0 else 'ADJUSTMENT'
-        )
-
-        LowStockAlert.create_or_update_for_product(product)
 
 class SaleCreateView(generics.ListCreateAPIView):
-    queryset = Sale.objects.all()
     serializer_class = SaleSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         return Sale.objects.filter(sold_by=self.request.user)
 
+    @transaction.atomic
     def perform_create(self, serializer):
-        # Just save the sale — all stock updates happen in the serializer
-        serializer.save(sold_by=self.request.user)
+        sale = serializer.save(sold_by=self.request.user)
+
+        for item in sale.items.select_related('product'):
+            product = item.product
+
+            if not product.is_volatile:
+                product.adjust_stock(
+                    qty_delta=-item.quantity,
+                    by_user=self.request.user,
+                    reason="sale",
+                    movement_type="SALE"
+                )
+
+    
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
