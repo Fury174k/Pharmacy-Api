@@ -159,13 +159,15 @@ def sales_by_date(request):
 
     sales = Sale.objects.filter(timestamp__date=selected_date, sold_by=request.user)
     serializer = SaleSerializer(sales, many=True)
-
-    return Response({
+    total = sales.aggregate(total_amount=Sum('total_amount'))['total_amount'] or 0
+    return Response([
+    {
         "date": str(selected_date),
-        "total_sales": sum(s.total_amount for s in sales),
+        "total": total,
         "transactions": sales.count(),
         "sales": serializer.data
-    })
+    }
+])
 
 
 @api_view(["GET"])

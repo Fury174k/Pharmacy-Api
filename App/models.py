@@ -158,20 +158,24 @@ class Sale(models.Model):
         on_delete=models.CASCADE,
         related_name="sales"
     )
-
     total_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=Decimal('0.00')
     )
-
     timestamp = models.DateTimeField(default=timezone.now)
+    client_uuid = models.UUIDField(unique=True)
 
     class Meta:
         ordering = ['-timestamp']
 
     def __str__(self):
         return f"Sale #{self.id} ({self.total_amount})"
+
+    def recalc_total(self):
+        total = sum(item.subtotal for item in self.items.all())
+        self.total_amount = total
+        self.save(update_fields=['total_amount'])
 
 
 class SaleItem(models.Model):
@@ -180,24 +184,27 @@ class SaleItem(models.Model):
         on_delete=models.CASCADE,
         related_name='items'
     )
-
     product = models.ForeignKey(
         Product,
         on_delete=models.CASCADE
     )
-
-    quantity = models.PositiveIntegerField()
+    quantity = models.DecimalField(max_digits=12, decimal_places=2)  # support fractional for volatile
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
-    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, editable=False)
 
     def save(self, *args, **kwargs):
+        # Calculate subtotal
         self.subtotal = Decimal(self.quantity) * self.unit_price
         super().save(*args, **kwargs)
 
-    def __str__(self):
-        return f"{self.product.name} x{self.quantity}"
-
-
+        # Deduct stock for non-volatile products
+        if not self.product.is_volatile:
+            self.product.adjust_stock(
+                qty_delta=-int(self.quantity),
+                by_user=self.sale.sold_by,
+                reason=f"Sale #{self.sale.id}",
+                movement_type='SALE'
+            )
 # ============================================================================
 # LOW STOCK ALERTS (TRACKED ONLY)
 # ============================================================================

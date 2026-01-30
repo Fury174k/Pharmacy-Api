@@ -83,89 +83,63 @@ class StockMovementSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['performed_by', 'resulting_stock', 'timestamp', 'movement_type']
 
-class SaleItemCreateSerializer(serializers.ModelSerializer):
+class SaleItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.ReadOnlyField(source='product.name')
+    subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+
     class Meta:
         model = SaleItem
-        fields = ['product', 'quantity', 'unit_price']
-
-    def validate(self, data):
-        product = data['product']
-        quantity = data['quantity']
-        unit_price = data.get('unit_price')
-
-        if quantity <= 0:
-            raise serializers.ValidationError("Quantity must be greater than zero.")
-
-        # Volatile items → price must be provided, stock ignored
-        if product.is_volatile:
-            if unit_price is None:
-                raise serializers.ValidationError(
-                    f"Unit price is required for volatile product '{product.name}'."
-                )
-        else:
-            # Non-volatile → enforce stock
-            if not product.can_deduct(quantity):
-                raise serializers.ValidationError(
-                    f"Insufficient stock for '{product.name}'."
-                )
-
-            # Lock price if client didn't pass one
-            if unit_price is None:
-                data['unit_price'] = product.unit_price
-
-        return data
-
+        fields = ['product', 'product_name', 'quantity', 'unit_price', 'subtotal']
 
 class SaleSerializer(serializers.ModelSerializer):
-    items = SaleItemCreateSerializer(many=True)
+    items = SaleItemSerializer(many=True)
+    total_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
 
     class Meta:
         model = Sale
-        fields = ['id', 'total_amount', 'timestamp', 'items']
-        read_only_fields = ['id', 'total_amount', 'timestamp']
+        fields = ['id', 'sold_by', 'total_amount', 'timestamp', 'items']
+        read_only_fields = ['sold_by', 'total_amount', 'timestamp']
 
-    @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         user = self.context['request'].user
 
-        if not items_data:
-            raise serializers.ValidationError("A sale must contain at least one item.")
+        # Create the Sale first
+        sale = Sale.objects.create(sold_by=user)
 
-        sale = Sale.objects.create(
-            sold_by=user,
-            total_amount=Decimal('0.00')
-        )
+        total_amount = Decimal('0.00')
 
-        total = Decimal('0.00')
+        for item_data in items_data:
+            product = item_data['product']
+            quantity = Decimal(item_data['quantity'])
+            unit_price = item_data.get('unit_price', product.unit_price)
 
-        for item in items_data:
-            product = item['product']
-            quantity = item['quantity']
-            unit_price = Decimal(item['unit_price'])
-
-            subtotal = unit_price * Decimal(quantity)
-
-            SaleItem.objects.create(
+            # Create SaleItem
+            sale_item = SaleItem.objects.create(
                 sale=sale,
                 product=product,
                 quantity=quantity,
                 unit_price=unit_price,
-                subtotal=subtotal
             )
 
-            # Deduct stock ONLY for non-volatile products
-            if not product.is_volatile:
+            # Add to total
+            total_amount += sale_item.subtotal
+
+            # Deduct stock for non-volatile items
+            if not getattr(product, 'is_volatile', False):
+                if not product.can_deduct(int(quantity)):
+                    raise serializers.ValidationError(
+                        f"Insufficient stock for product {product.name}. Available: {product.stock}"
+                    )
                 product.adjust_stock(
-                    qty_delta=-quantity,
+                    qty_delta=-int(quantity),
                     by_user=user,
                     reason=f"Sale #{sale.id}",
                     movement_type='SALE'
                 )
 
-            total += subtotal
-
-        sale.total_amount = total
+        # Update total_amount on Sale
+        sale.total_amount = total_amount
         sale.save(update_fields=['total_amount'])
 
         return sale
