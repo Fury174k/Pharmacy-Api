@@ -17,6 +17,7 @@ from .utils.csv_importer import import_products_from_csv
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 @parser_classes([MultiPartParser])
+@permission_classes([IsAuthenticated])
 def import_csv(request):
     file = request.FILES.get('file')
     if not file:
@@ -25,14 +26,25 @@ def import_csv(request):
     result = import_products_from_csv(file, user=request.user)
     return Response(result, status=status.HTTP_200_OK)
 
+
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_user(request):
     serializer = RegisterSerializer(data=request.data)
-    if serializer.is_valid():
-        serializer.save()
-        return Response({'message': 'User registered successfully'}, status=201)
-    return Response(serializer.errors, status=400)
+    serializer.is_valid(raise_exception=True)
+
+    user = serializer.save()
+    token = Token.objects.get(user=user)
+
+    return Response({
+        "token": token.key,
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+        }
+    }, status=status.HTTP_201_CREATED)
+
 
 
 @api_view(['POST'])
