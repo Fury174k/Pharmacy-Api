@@ -4,6 +4,8 @@ from rest_framework.authtoken.models import Token
 from .models import Product, StockMovement, Sale, SaleItem, LowStockAlert, AlertPreference
 from django.db import transaction
 from decimal import Decimal
+from django.utils import timezone
+import uuid
 
 User = get_user_model()
 
@@ -96,69 +98,122 @@ class SaleItemSerializer(serializers.ModelSerializer):
 class SaleSerializer(serializers.ModelSerializer):
     items = SaleItemSerializer(many=True)
     total_amount = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    external_id = serializers.UUIDField(required=False, allow_null=True, write_only=True)
+    source_device = serializers.CharField(max_length=128, required=False, default='web', write_only=True)
+    client_timestamp = serializers.DateTimeField(required=False, allow_null=True, write_only=True)
 
     class Meta:
         model = Sale
-        fields = ['id', 'sold_by', 'total_amount', 'timestamp', 'items']
-        read_only_fields = ['sold_by', 'total_amount', 'timestamp']
+        fields = [
+            'id', 'sold_by', 'total_amount', 'timestamp', 'synced_at',
+            'items', 'external_id', 'source_device', 'client_timestamp'
+        ]
+        read_only_fields = ['sold_by', 'total_amount', 'timestamp', 'synced_at', 'id']
 
     def create(self, validated_data):
+        """
+        OFFLINE-FIRST SALES SYNC (APPEND-ONLY, IDEMPOTENT)
+        
+        Hard Rules:
+        1. Sales are append-only (never update/delete past sales)
+        2. Stock is derived on backend, never accepted from client
+        3. Volatile products bypass stock entirely
+        4. Non-volatile products allow negative stock + trigger alerts
+        5. Sync is idempotent (same external_id = no duplicate)
+        """
         items_data = validated_data.pop('items')
         user = self.context['request'].user
+        
+        # Extract offline-sync metadata
+        external_id = validated_data.pop('external_id', None)
+        source_device = validated_data.pop('source_device', 'web')
+        client_timestamp = validated_data.pop('client_timestamp', None)
 
-        # Create the Sale first
-        sale = Sale.objects.create(sold_by=user)
+        # IDEMPOTENCY: If external_id provided and already exists, return existing sale silently
+        # This allows safe retries from offline clients without duplicating sales
+        if external_id:
+            try:
+                existing_sale = Sale.objects.get(external_id=external_id)
+                # Sale already synced; return it without error
+                return existing_sale
+            except Sale.DoesNotExist:
+                pass
+        else:
+            # Generate external_id if not provided (ensures all sales can be de-duplicated)
+            external_id = uuid.uuid4()
 
-        total_amount = Decimal('0.00')
-
-        for item_data in items_data:
-            # Support either existing product (PK) or nested product_data to create on-the-fly
-            product = item_data.get('product')
-            product_data = item_data.get('product_data')
-
-            if product is None and product_data:
-                # Create product owned by this user
-                prod_serializer = ProductSerializer(data=product_data)
-                prod_serializer.is_valid(raise_exception=True)
-                product = prod_serializer.save(user=user)
-
-            quantity = Decimal(item_data['quantity'])
-            unit_price = item_data.get('unit_price')
-            if unit_price is None:
-                unit_price = product.unit_price if product is not None else Decimal('0.00')
-
-            # Create SaleItem
-            sale_item = SaleItem.objects.create(
-                sale=sale,
-                product=product,
-                quantity=quantity,
-                unit_price=unit_price,
+        # TRANSACTION: All-or-nothing multi-item sale creation + stock adjustment
+        # Ensures atomicity: if any item fails, entire sale is rolled back
+        with transaction.atomic():
+            # Create Sale with offline-sync metadata
+            sale = Sale.objects.create(
+                sold_by=user,
+                external_id=external_id,
+                source_device=source_device,
+                client_timestamp=client_timestamp or timezone.now(),
+                **validated_data
             )
 
-            # Add to total
-            total_amount += sale_item.subtotal
+            total_amount = Decimal('0.00')
+            products_to_alert = []  # Track non-volatile products for alert triggering
 
-            # If product is volatile (untracked), persist last-used price as suggestion
-            if getattr(product, 'is_volatile', False):
-                product.unit_price = unit_price
-                product.save(update_fields=['unit_price'])
+            for item_data in items_data:
+                # Support either existing product (PK) or nested product_data for one-off items
+                product = item_data.get('product')
+                product_data = item_data.get('product_data')
 
-            # Deduct stock for tracked products
-            if product and product.is_tracked():
-                if not product.can_deduct(int(quantity)):
-                    raise serializers.ValidationError(
-                        f"Insufficient stock for product {product.name}. Available: {product.stock}"
-                    )
-                product.adjust_stock(
-                    qty_delta=-int(quantity),
-                    by_user=user,
-                    reason=f"Sale #{sale.id}",
-                    movement_type='SALE'
+                if product is None and product_data:
+                    # One-off product: create it owned by this user
+                    prod_serializer = ProductSerializer(data=product_data)
+                    prod_serializer.is_valid(raise_exception=True)
+                    product = prod_serializer.save(user=user)
+
+                quantity = Decimal(item_data['quantity'])
+                unit_price = item_data.get('unit_price')
+                if unit_price is None:
+                    unit_price = product.unit_price if product is not None else Decimal('0.00')
+
+                # Create SaleItem (always persisted, regardless of stock status)
+                sale_item = SaleItem.objects.create(
+                    sale=sale,
+                    product=product,
+                    quantity=quantity,
+                    unit_price=unit_price,
                 )
 
-        # Update total_amount on Sale
-        sale.total_amount = total_amount
-        sale.save(update_fields=['total_amount'])
+                # Accumulate total server-side (never trust client total)
+                total_amount += sale_item.subtotal
+
+                # VOLATILE PRODUCTS: Bypass stock entirely, still record in analytics
+                # Update product's last-used price for dynamic pricing suggestions
+                if getattr(product, 'is_volatile', False):
+                    product.unit_price = unit_price
+                    product.save(update_fields=['unit_price', 'updated_at'])
+                
+                # NON-VOLATILE PRODUCTS: Deduct stock on backend, allow negative, trigger alerts
+                else:
+                    # Always deduct stock (no validation, allow negative)
+                    # Backend stock is derived, never sent from client
+                    qty_int = int(quantity)
+                    product.adjust_stock(
+                        qty_delta=-qty_int,
+                        by_user=user,
+                        reason=f"Sale #{sale.id}",
+                        movement_type='SALE'
+                    )
+                    # Mark for alert creation after all items are saved
+                    if product not in products_to_alert:
+                        products_to_alert.append(product)
+
+            # Server-side total computation (NEVER trust client)
+            sale.total_amount = total_amount
+            sale.synced_at = timezone.now()  # Mark as fully synced
+            sale.save(update_fields=['total_amount', 'synced_at', 'updated_at'])
+
+            # Trigger low-stock alerts for non-volatile products
+            # (Idempotent: existing alert is updated, new one created if needed)
+            for product in products_to_alert:
+                LowStockAlert.create_or_update_for_product(product)
 
         return sale
 

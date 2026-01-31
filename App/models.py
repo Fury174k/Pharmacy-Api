@@ -162,12 +162,50 @@ class Sale(models.Model):
         on_delete=models.CASCADE,
         related_name="sales"
     )
+    
+    # OFFLINE-FIRST: Unique ID from client to detect duplicate submissions (idempotency key)
+    # If client retries, same external_id means same sale — backend ignores duplicate silently
+    external_id = models.UUIDField(
+        unique=True,
+        null=True,
+        blank=True,
+        help_text="Client-generated UUID for idempotent sync (offline deduplication)"
+    )
+    
+    # OFFLINE-FIRST: Device/client that submitted this sale for audit & debugging
+    source_device = models.CharField(
+        max_length=128,
+        default='web',
+        help_text="Device/client identifier (e.g., 'web', 'mobile-001', 'pos-02')"
+    )
+    
+    # OFFLINE-FIRST: Timestamp when client created the sale (may differ from server receipt time)
+    client_timestamp = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When client created the sale (timezone-aware, used for analytics)"
+    )
+    
     total_amount = models.DecimalField(
         max_digits=12,
         decimal_places=2,
         default=Decimal('0.00')
     )
+    
+    # Server timestamp when sale was received/created
     timestamp = models.DateTimeField(default=timezone.now)
+    
+    # OFFLINE-FIRST: Timestamp when all SaleItems were synced and stock adjusted
+    # Used to ensure alerts are created only once per sale
+    synced_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When stock was deducted and alerts were created (idempotency marker)"
+    )
+    
+    # Track when this sale record was last modified (for soft-audit purposes)
+    updated_at = models.DateTimeField(auto_now=True)
+    
     client_uuid = models.UUIDField(unique=True)
 
     class Meta:
