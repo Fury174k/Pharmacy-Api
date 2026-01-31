@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from rest_framework.authtoken.models import Token
-from .models import Product, StockMovement, Sale, SaleItem, LowStockAlert, Alert, AlertPreference
+from .models import Product, StockMovement, Sale, SaleItem, LowStockAlert, AlertPreference
 from django.db import transaction
 from decimal import Decimal
 
@@ -86,10 +86,12 @@ class StockMovementSerializer(serializers.ModelSerializer):
 class SaleItemSerializer(serializers.ModelSerializer):
     product_name = serializers.ReadOnlyField(source='product.name')
     subtotal = serializers.DecimalField(max_digits=12, decimal_places=2, read_only=True)
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all(), required=False, allow_null=True)
+    product_data = ProductSerializer(write_only=True, required=False)
 
     class Meta:
         model = SaleItem
-        fields = ['product', 'product_name', 'quantity', 'unit_price', 'subtotal']
+        fields = ['product', 'product_data', 'product_name', 'quantity', 'unit_price', 'subtotal']
 
 class SaleSerializer(serializers.ModelSerializer):
     items = SaleItemSerializer(many=True)
@@ -110,9 +112,20 @@ class SaleSerializer(serializers.ModelSerializer):
         total_amount = Decimal('0.00')
 
         for item_data in items_data:
-            product = item_data['product']
+            # Support either existing product (PK) or nested product_data to create on-the-fly
+            product = item_data.get('product')
+            product_data = item_data.get('product_data')
+
+            if product is None and product_data:
+                # Create product owned by this user
+                prod_serializer = ProductSerializer(data=product_data)
+                prod_serializer.is_valid(raise_exception=True)
+                product = prod_serializer.save(user=user)
+
             quantity = Decimal(item_data['quantity'])
-            unit_price = item_data.get('unit_price', product.unit_price)
+            unit_price = item_data.get('unit_price')
+            if unit_price is None:
+                unit_price = product.unit_price if product is not None else Decimal('0.00')
 
             # Create SaleItem
             sale_item = SaleItem.objects.create(
@@ -125,8 +138,13 @@ class SaleSerializer(serializers.ModelSerializer):
             # Add to total
             total_amount += sale_item.subtotal
 
-            # Deduct stock for non-volatile items
-            if not getattr(product, 'is_volatile', False):
+            # If product is volatile (untracked), persist last-used price as suggestion
+            if getattr(product, 'is_volatile', False):
+                product.unit_price = unit_price
+                product.save(update_fields=['unit_price'])
+
+            # Deduct stock for tracked products
+            if product and product.is_tracked():
                 if not product.can_deduct(int(quantity)):
                     raise serializers.ValidationError(
                         f"Insufficient stock for product {product.name}. Available: {product.stock}"
@@ -168,7 +186,7 @@ class AlertSerializer(serializers.ModelSerializer):
     product = ProductBriefSerializer(read_only=True)
 
     class Meta:
-        model = Alert
+        model = LowStockAlert
         fields = [
             'id', 'product', 'severity', 'triggered_at',
             'acknowledged', 'days_low_stock', 'message'
@@ -177,4 +195,4 @@ class AlertSerializer(serializers.ModelSerializer):
 class AlertPreferenceSerializer(serializers.ModelSerializer):
     class Meta:
         model = AlertPreference
-        fields = ['notify_email', 'notify_inapp', 'low_stock_threshold']
+        fields = ['notify_email', 'notify_inapp']

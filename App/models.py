@@ -42,6 +42,9 @@ class Product(models.Model):
         default='TRACKED'
     )
 
+    # Whether this product is volatile (price/quantity not persisted to stock)
+    is_volatile = models.BooleanField(default=False)
+
     # Only meaningful for TRACKED products
     stock = models.IntegerField(null=True, blank=True)
     reorder_level = models.IntegerField(null=True, blank=True)
@@ -59,7 +62,8 @@ class Product(models.Model):
         return f"{self.name} ({self.sku})"
 
     def is_tracked(self) -> bool:
-        return self.stock_mode == 'TRACKED'
+        # A product is considered tracked when it is not marked volatile
+        return not self.is_volatile
 
     def can_deduct(self, qty: int) -> bool:
         if not self.is_tracked():
@@ -198,9 +202,15 @@ class SaleItem(models.Model):
         super().save(*args, **kwargs)
 
         # Deduct stock for non-volatile products
-        if not self.product.is_volatile:
+        # Only adjust stock for tracked products (tracked == not volatile)
+        if self.product.is_tracked():
+            try:
+                qty_int = int(self.quantity)
+            except Exception:
+                qty_int = int(Decimal(self.quantity))
+
             self.product.adjust_stock(
-                qty_delta=-int(self.quantity),
+                qty_delta=-qty_int,
                 by_user=self.sale.sold_by,
                 reason=f"Sale #{self.sale.id}",
                 movement_type='SALE'

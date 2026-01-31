@@ -4,8 +4,8 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.views import APIView
-from .serializers import RegisterSerializer, LoginSerializer, ProductSerializer, StockMovementSerializer, SaleSerializer, LowStockAlertSerializer, AlertSerializer, AlertPreferenceSerializer
-from .models import Product, StockMovement, Sale, LowStockAlert, Alert, AlertPreference
+from .serializers import RegisterSerializer, LoginSerializer, ProductSerializer, StockMovementSerializer, SaleSerializer, LowStockAlertSerializer, AlertPreferenceSerializer
+from .models import Product, StockMovement, Sale, LowStockAlert, AlertPreference
 from rest_framework import generics, permissions, status
 from django.db import transaction
 from django.db.models.functions import TruncDate, TruncWeek, TruncMonth
@@ -131,18 +131,9 @@ class SaleCreateView(generics.ListCreateAPIView):
 
     @transaction.atomic
     def perform_create(self, serializer):
+        # Stock adjustments are handled inside the serializer/create logic.
+        # Avoid duplicate adjustments here.
         sale = serializer.save(sold_by=self.request.user)
-
-        for item in sale.items.select_related('product'):
-            product = item.product
-
-            if not product.is_volatile:
-                product.adjust_stock(
-                    qty_delta=-item.quantity,
-                    by_user=self.request.user,
-                    reason="sale",
-                    movement_type="SALE"
-                )
 
     
 
@@ -210,13 +201,13 @@ def sales_trend(request):
     return Response(data)
 
 class LowStockAlertListView(generics.ListAPIView):
-    serializer_class = AlertSerializer
+    serializer_class = LowStockAlertSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
         # Show alerts created for the logged-in user
-        return Alert.objects.filter(
-            created_for=self.request.user,
+        return LowStockAlert.objects.filter(
+            product__user=self.request.user,
             acknowledged=False
         ).select_related('product')
 
@@ -231,11 +222,11 @@ class LowStockAlertListView(generics.ListAPIView):
 
 
 class AlertHistoryView(generics.ListAPIView):
-    serializer_class = AlertSerializer
+    serializer_class = LowStockAlertSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Alert.objects.filter(created_for=self.request.user).order_by('-triggered_at')
+        return LowStockAlert.objects.filter(product__user=self.request.user).order_by('-triggered_at')
     
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
@@ -252,7 +243,7 @@ class AcknowledgeAlertView(APIView):
 
     def post(self, request, *args, **kwargs):
         alert_ids = request.data.get('alert_ids', [])
-        updated = Alert.objects.filter(id__in=alert_ids, created_for=request.user).update(acknowledged=True)
+        updated = LowStockAlert.objects.filter(id__in=alert_ids, product__user=request.user).update(acknowledged=True)
         return Response({"message": f"{updated} alerts acknowledged."})
 
 # GET & PUT /api/alerts/settings/
