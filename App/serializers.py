@@ -151,6 +151,7 @@ class SaleSerializer(serializers.ModelSerializer):
                 external_id=external_id,
                 source_device=source_device,
                 client_timestamp=client_timestamp or timezone.now(),
+                client_uuid=uuid.uuid4(),
                 **validated_data
             )
 
