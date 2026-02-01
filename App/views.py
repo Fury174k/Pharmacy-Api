@@ -156,7 +156,7 @@ class SaleCreateView(generics.ListCreateAPIView):
         - Alert triggering for low stock
         No additional logic needed here (keep it clean).
         """
-        serializer.save(sold_by=self.request.user)
+        serializer.save()
 
 
 
