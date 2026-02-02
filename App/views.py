@@ -73,7 +73,6 @@ class ProductListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        # Show only products owned by this user
         return Product.objects.all()
 
     def perform_create(self, serializer):
@@ -224,7 +223,6 @@ def sales_trend(request):
     return Response(data)
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
 def product_sales_analytics(request):
     """
     Get aggregated sales data for a specific product (with/without stock tracking).
@@ -259,10 +257,10 @@ def product_sales_analytics(request):
         )
     
     try:
-        product = Product.objects.get(id=product_id, user=request.user)
+        product = Product.objects.get(id=product_id)
     except Product.DoesNotExist:
         return Response(
-            {"error": "Product not found or you do not own it"},
+            {"error": "Product not found"},
             status=status.HTTP_404_NOT_FOUND
         )
     
