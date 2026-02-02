@@ -144,7 +144,7 @@ class SaleCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Sale.objects.filter(sold_by=self.request.user).select_related('sold_by')
+        return Sale.objects.all()
 
     def perform_create(self, serializer):
         """
