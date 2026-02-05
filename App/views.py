@@ -170,7 +170,7 @@ def sales_by_date(request):
     else:
         selected_date = date.today()
 
-    sales = Sale.objects.filter(timestamp__date=selected_date, sold_by=request.user)
+    sales = Sale.objects.filter(timestamp__date=selected_date)
     serializer = SaleSerializer(sales, many=True)
     total = sales.aggregate(total_amount=Sum('total_amount'))['total_amount'] or 0
     return Response([
