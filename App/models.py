@@ -71,9 +71,16 @@ class Product(models.Model):
         return self.stock is not None and self.stock >= qty
 
     def adjust_stock(self, qty_delta: int, by_user=None, reason=None, movement_type=None):
+        import traceback
+        print(f"\n[ADJUST_STOCK] 🔴 Called for {self.sku}")
+        print(f"[ADJUST_STOCK] Delta: {qty_delta}, Reason: {reason}")
+        print(f"[ADJUST_STOCK] Stack trace:")
+        traceback.print_stack()
+        print("\n")
         """
         Only applies to TRACKED products.
         UNTRACKED products intentionally skip stock logic.
+        Allows negative stock - alerts will be triggered instead.
         """
         if not self.is_tracked():
             return
@@ -87,10 +94,9 @@ class Product(models.Model):
             if p.stock is None:
                 p.stock = 0
 
-            if qty_delta < 0 and p.stock < abs(qty_delta):
-                raise ValueError(
-                    f"Insufficient stock for {p.sku}. Available={p.stock}, requested={abs(qty_delta)}"
-                )
+            # REMOVED: Stock validation - allow negative stock
+            # if qty_delta < 0 and p.stock < abs(qty_delta):
+            #     raise ValueError(...)
 
             p.stock += qty_delta
             p.save(update_fields=['stock', 'updated_at'])
@@ -104,6 +110,7 @@ class Product(models.Model):
                 movement_type=movement_type or ('RESTOCK' if qty_delta > 0 else 'SALE')
             )
 
+        # Alert will trigger if stock is low or negative
         LowStockAlert.create_or_update_for_product(p)
 
 
