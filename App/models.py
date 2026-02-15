@@ -246,20 +246,6 @@ class SaleItem(models.Model):
         self.subtotal = Decimal(self.quantity) * self.unit_price
         super().save(*args, **kwargs)
 
-        # Deduct stock for non-volatile products
-        # Only adjust stock for tracked products (tracked == not volatile)
-        if self.product.is_tracked():
-            try:
-                qty_int = int(self.quantity)
-            except Exception:
-                qty_int = int(Decimal(self.quantity))
-
-            self.product.adjust_stock(
-                qty_delta=-qty_int,
-                by_user=self.sale.sold_by,
-                reason=f"Sale #{self.sale.id}",
-                movement_type='SALE'
-            )
 # ============================================================================
 # LOW STOCK ALERTS (TRACKED ONLY)
 # ============================================================================
