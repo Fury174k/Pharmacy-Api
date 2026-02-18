@@ -128,10 +128,6 @@ class SaleSerializer(serializers.ModelSerializer):
         external_id = validated_data.pop('external_id', None)
         import traceback
         
-        print(f"\n[SERIALIZER] 🔵 CREATE called with external_id: {external_id}")
-        traceback.print_stack()
-        print("\n")
-        
         source_device = validated_data.pop('source_device', 'web')
         client_timestamp = validated_data.pop('client_timestamp', None)
 
