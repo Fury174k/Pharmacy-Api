@@ -7,9 +7,9 @@ from rest_framework.views import APIView
 from .serializers import RegisterSerializer, LoginSerializer, ProductSerializer, StockMovementSerializer, SaleSerializer, LowStockAlertSerializer, AlertPreferenceSerializer
 from .models import Product, StockMovement, Sale, SaleItem, LowStockAlert, AlertPreference
 from rest_framework import generics, permissions, status
-from django.db import transaction
+from django.db import transaction, models
 from django.db.models.functions import TruncDate, TruncWeek, TruncMonth
-from django.db.models import Sum, Count, Q
+from django.db.models import Sum, Count, Q, F
 from rest_framework.parsers import MultiPartParser
 from .utils.csv_importer import import_products_from_csv
 from decimal import Decimal
@@ -68,15 +68,75 @@ def logout_user(request):
     request.user.auth_token.delete()
     return Response({'message': 'Logged out successfully'}, status=200)
 
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def dashboard_summary(request):
+    """
+    Combined dashboard endpoint - returns all data needed for home screen in one call.
+    Reduces load from 4 API calls to 1, dramatically improving load time.
+    """
+    from datetime import date, datetime, timedelta
+    
+    today = date.today()
+    user = request.user
+    
+    # Sales today - get aggregated data without full records
+    today_sales = Sale.objects.filter(
+        timestamp__date=today
+    )
+    sales_count = today_sales.count()
+    today_revenue = today_sales.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')
+    
+    # Recent sales (last 5 for display)
+    recent_sales_list = SaleSerializer(
+        today_sales.order_by('-timestamp')[:5],
+        many=True
+    ).data
+    
+    # Low stock count - products that need reordering
+    low_stock_count = Product.objects.filter(
+        user=user,
+        active=True,
+        stock__lte=models.F('reorder_level'),
+        reorder_level__gt=0
+    ).count()
+    
+    # Recent stock movements (last 5 only)
+    recent_movements = StockMovement.objects.filter(
+        product__user=user
+    ).select_related('product').order_by('-timestamp')[:5]
+    recent_movements_data = StockMovementSerializer(recent_movements, many=True).data
+    
+    # Critical unread alerts (last 3 only)
+    critical_alerts = LowStockAlert.objects.filter(
+        product__user=user,
+        severity='critical',
+        acknowledged=False
+    ).select_related('product').order_by('-triggered_at')[:3]
+    critical_alerts_data = LowStockAlertSerializer(critical_alerts, many=True).data
+    
+    return Response({
+        'sales_today': {
+            'count': sales_count,
+            'revenue': float(today_revenue),
+        },
+        'recent_sales': recent_sales_list,
+        'low_stock_count': low_stock_count,
+        'recent_movements': recent_movements_data,
+        'critical_alerts': critical_alerts_data,
+        'critical_alert_count': len(critical_alerts_data),
+    })
+
 class ProductListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Product.objects.all()
+        limit = self.request.query_params.get('limit', 100)
+        return Product.objects.select_related('user')[:int(limit)]
 
     def perform_create(self, serializer):
-        # Automatically assign the logged-in user
         serializer.save(user=self.request.user)
 
 
@@ -98,9 +158,10 @@ class StockMovementCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
+        limit = self.request.query_params.get('limit', 50)
         return StockMovement.objects.filter(
             product__user=self.request.user
-        ).select_related('product')
+        ).select_related('product', 'performed_by').order_by('-timestamp')[:int(limit)]
 
     @transaction.atomic
     def perform_create(self, serializer):
@@ -143,18 +204,10 @@ class SaleCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Sale.objects.all()
+        limit = self.request.query_params.get('limit', 50)
+        return Sale.objects.all().order_by('-timestamp')[:int(limit)]
 
     def perform_create(self, serializer):
-        """
-        Serializer handles ALL offline-sync logic:
-        - Duplicate detection by external_id (idempotency)
-        - Transaction-safe multi-item creation
-        - Server-side total computation
-        - Stock deduction for non-volatile products only
-        - Alert triggering for low stock
-        No additional logic needed here (keep it clean).
-        """
         serializer.save()
 
 
@@ -367,15 +420,24 @@ class AlertHistoryView(generics.ListAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return LowStockAlert.objects.filter(product__user=self.request.user).order_by('-triggered_at')
+        limit = self.request.query_params.get('limit', 50)
+        return LowStockAlert.objects.filter(
+            product__user=self.request.user
+        ).select_related('product').order_by('-triggered_at')[:int(limit)]
     
     def list(self, request, *args, **kwargs):
         queryset = self.get_queryset()
         serializer = self.get_serializer(queryset, many=True)
         return Response({
             "alerts": serializer.data,
-            "unread_count": queryset.filter(acknowledged=False).count(),
-            "critical_count": queryset.filter(severity='critical').count()
+            "unread_count": LowStockAlert.objects.filter(
+                product__user=request.user,
+                acknowledged=False
+            ).count(),
+            "critical_count": LowStockAlert.objects.filter(
+                product__user=request.user,
+                severity='critical'
+            ).count()
         })
 
 # POST /api/alerts/acknowledge/

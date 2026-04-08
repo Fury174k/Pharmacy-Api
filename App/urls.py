@@ -1,10 +1,17 @@
 from django.urls import path
-from .views import register_user, login_user, logout_user, ProductListCreateView, StockMovementCreateView, SaleCreateView, sales_by_date, import_csv, sales_trend, product_sales_analytics, ProductRetrieveUpdateDestroyView, LowStockAlertListView, AlertHistoryView, AcknowledgeAlertView, AlertSettingsView
+from .views import (
+    register_user, login_user, logout_user, ProductListCreateView, 
+    StockMovementCreateView, SaleCreateView, sales_by_date, import_csv, 
+    sales_trend, product_sales_analytics, ProductRetrieveUpdateDestroyView, 
+    LowStockAlertListView, AlertHistoryView, AcknowledgeAlertView, 
+    AlertSettingsView, dashboard_summary
+)
 
 urlpatterns = [
     path('register/', register_user, name='register'),
     path('login/', login_user, name='login'),
     path('logout/', logout_user, name='logout'),
+    path('dashboard/', dashboard_summary, name='dashboard-summary'),
     path('products/', ProductListCreateView.as_view(), name='product-list-create'),
     path('products/<int:pk>/', ProductRetrieveUpdateDestroyView.as_view(), name='product-detail'),
     path('stock-movements/', StockMovementCreateView.as_view(), name='stock-movement-create'),
