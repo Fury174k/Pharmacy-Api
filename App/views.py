@@ -132,7 +132,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductSerializer
     permission_classes = [permissions.IsAuthenticated]
 
-     def get_queryset(self):
+    def get_queryset(self):
         limit = int(self.request.query_params.get('limit', 100))
         offset = int(self.request.query_params.get('offset', 0))
         return Product.objects.select_related('user')[offset:offset + limit]
