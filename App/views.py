@@ -254,8 +254,18 @@ def sales_trend(request):
         trunc_func = TruncWeek
 
     # Use your actual timestamp field
+    queryset = Sale.objects.all()
+    
+    start_date = request.GET.get("start_date")
+    end_date = request.GET.get("end_date")
+    
+    if start_date:
+        queryset = queryset.filter(timestamp__date__gte=start_date)
+    if end_date:
+        queryset = queryset.filter(timestamp__date__lte=end_date)
+    
     sales = (
-        Sale.objects.annotate(period=trunc_func("timestamp"))
+        queryset.annotate(period=trunc_func("timestamp"))
         .values("period")
         .annotate(
             total_sales=Count("id"),
