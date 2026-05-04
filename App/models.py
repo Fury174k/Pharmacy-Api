@@ -268,26 +268,43 @@ class LowStockAlert(models.Model):
 
     @classmethod
     def create_or_update_for_product(cls, product):
+        """
+        Create or update low-stock alerts for a product.
+        Alerts are only created when stock is strictly below reorder_level.
+        When stock is restored above reorder_level, all unacknowledged alerts are deleted.
+        
+        Severity levels based on stock:reorder_level ratio:
+        - critical: stock <= 10% of reorder_level (very low, urgent)
+        - warning: 10% < stock <= 50% of reorder_level (getting low)
+        - info: 50% < stock <= 100% of reorder_level (slightly below target)
+        """
         if not product.is_tracked():
             return
 
         if product.reorder_level is None or product.stock is None:
             return
 
-        if product.stock > product.reorder_level:
+        # CASE 1: Stock is at or above reorder level — product is healthy
+        # Delete any existing unacknowledged alerts (product no longer needs restocking)
+        if product.stock >= product.reorder_level:
             cls.objects.filter(product=product, acknowledged=False).delete()
             return
 
+        # CASE 2: Stock is below reorder level — determine severity and create/update alert
         ratio = product.stock / max(product.reorder_level, 1)
 
-        if ratio <= 0.2:
+        # Stricter severity thresholds:
+        # - critical only for severely depleted stock (10% or less)
+        # - warning for moderately low (10-50%)
+        # - info for slightly below target (50-100%)
+        if ratio <= 0.1:
             severity = 'critical'
         elif ratio <= 0.5:
             severity = 'warning'
         else:
             severity = 'info'
 
-        message = f"Stock {severity}ly low — {product.stock} units remaining"
+        message = f"Stock {severity}ly low — {product.stock} units remaining (reorder level: {product.reorder_level})"
 
         alert, created = cls.objects.get_or_create(
             product=product,
@@ -299,6 +316,7 @@ class LowStockAlert(models.Model):
             }
         )
 
+        # If alert already existed, update severity, message, and track consecutive days low
         if not created:
             alert.severity = severity
             alert.message = message
