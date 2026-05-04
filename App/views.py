@@ -167,11 +167,13 @@ class ProductRetrieveUpdateDestroyView(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         # restrict to products owned by requesting user
-        return Product.objects.all()
+        return Product.objects.filter(user=self.request.user)
 
     def perform_update(self, serializer):
         # Ensure the owner remains the same (user is read-only in serializer)
-        serializer.save()
+        product = serializer.save()
+        # Re-evaluate low-stock state immediately after manual stock updates
+        LowStockAlert.create_or_update_for_product(product)
 
 class StockMovementCreateView(generics.ListCreateAPIView):
     serializer_class = StockMovementSerializer
@@ -201,6 +203,9 @@ class StockMovementCreateView(generics.ListCreateAPIView):
             reason=reason,
             movement_type='RESTOCK' if delta > 0 else 'ADJUSTMENT'
         )
+
+        # Immediately refresh low-stock alerts after any stock change
+        LowStockAlert.create_or_update_for_product(product)
 
 
 class SaleCreateView(generics.ListCreateAPIView):
