@@ -109,10 +109,14 @@ def dashboard_summary(request):
     recent_movements_data = StockMovementSerializer(recent_movements, many=True).data
     
     # Critical unread alerts (last 3 only)
+    # IMPORTANT: Only show alerts for products that CURRENTLY have low stock.
+    # This prevents stale alerts from showing up after restocking.
+    from django.db.models import Q
     critical_alerts = LowStockAlert.objects.filter(
         product__user=user,
         severity='critical',
-        acknowledged=False
+        acknowledged=False,
+        product__stock__lt=models.F('product__reorder_level')  # Validate stock is still low
     ).select_related('product').order_by('-triggered_at')[:3]
     critical_alerts_data = LowStockAlertSerializer(critical_alerts, many=True).data
     
@@ -133,9 +137,8 @@ class ProductListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        limit = int(self.request.query_params.get('limit', 100))
-        offset = int(self.request.query_params.get('offset', 0))
-        return Product.objects.select_related('user')[offset:offset + limit]
+        limit = self.request.query_params.get('limit', 100)
+        return Product.objects.select_related('user')[:int(limit)]
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -254,18 +257,8 @@ def sales_trend(request):
         trunc_func = TruncWeek
 
     # Use your actual timestamp field
-    queryset = Sale.objects.all()
-    
-    start_date = request.GET.get("start_date")
-    end_date = request.GET.get("end_date")
-    
-    if start_date:
-        queryset = queryset.filter(timestamp__date__gte=start_date)
-    if end_date:
-        queryset = queryset.filter(timestamp__date__lte=end_date)
-    
     sales = (
-        queryset.annotate(period=trunc_func("timestamp"))
+        Sale.objects.annotate(period=trunc_func("timestamp"))
         .values("period")
         .annotate(
             total_sales=Count("id"),
