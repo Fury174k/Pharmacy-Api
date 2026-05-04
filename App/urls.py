@@ -4,7 +4,7 @@ from .views import (
     StockMovementCreateView, SaleCreateView, sales_by_date, import_csv, 
     sales_trend, product_sales_analytics, ProductRetrieveUpdateDestroyView, 
     LowStockAlertListView, AlertHistoryView, AcknowledgeAlertView, 
-    AlertSettingsView, dashboard_summary
+    AlertSettingsView, dashboard_summary, acknowledge_all_alerts
 )
 
 urlpatterns = [
@@ -23,6 +23,7 @@ urlpatterns = [
     path("alerts/low-stock/", LowStockAlertListView.as_view(), name="low_stock_alerts"),
     path('alerts/history/', AlertHistoryView.as_view(), name='alert-history'),
     path('alerts/acknowledge/', AcknowledgeAlertView.as_view(), name='alert-acknowledge'),
+    path('alerts/acknowledge-all/', acknowledge_all_alerts, name='alert-acknowledge-all'),
     path('alerts/settings/', AlertSettingsView.as_view(), name='alert-settings'),
 ]
 
