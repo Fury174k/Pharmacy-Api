@@ -75,11 +75,26 @@ def dashboard_summary(request):
     """
     Combined dashboard endpoint - returns all data needed for home screen in one call.
     Reduces load from 4 API calls to 1, dramatically improving load time.
+    
+    IMPORTANT: Proactively creates alerts for products with current low stock
+    to ensure alerts appear immediately when a product first falls below reorder_level.
     """
     from datetime import date, datetime, timedelta
     
     today = date.today()
     user = request.user
+    
+    # PROACTIVE ALERT CREATION: Ensure alerts exist for all products currently at/below reorder level
+    # This handles products that may have started with low stock or had reorder_level updated
+    low_stock_products = Product.objects.filter(
+        user=user,
+        active=True,
+        stock__lte=models.F('reorder_level'),
+        reorder_level__gt=0,
+        is_volatile=False  # Only tracked products
+    )
+    for product in low_stock_products:
+        LowStockAlert.create_or_update_for_product(product)
     
     # Sales today - get aggregated data without full records
     today_sales = Sale.objects.filter(
@@ -452,6 +467,20 @@ class AcknowledgeAlertView(APIView):
         alert_ids = request.data.get('alert_ids', [])
         updated = LowStockAlert.objects.filter(id__in=alert_ids, product__user=request.user).update(acknowledged=True)
         return Response({"message": f"{updated} alerts acknowledged."})
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def acknowledge_all_alerts(request):
+    """
+    Mark ALL unacknowledged alerts as read for the authenticated user.
+    """
+    updated = LowStockAlert.objects.filter(
+        product__user=request.user,
+        acknowledged=False
+    ).update(acknowledged=True)
+    return Response({"message": f"{updated} alerts acknowledged."})
+
 
 # GET & PUT /api/alerts/settings/
 class AlertSettingsView(APIView):
