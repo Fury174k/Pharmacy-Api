@@ -154,7 +154,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
     def get_queryset(self):
         limit = int(self.request.query_params.get('limit', 100))
         offset = int(self.request.query_params.get('offset', 0))
-        return Product.objects.filter(user=self.request.user).select_related('user').order_by('id')[offset:offset + limit]
+        return Product.objects.select_related('user').order_by('id')[offset:offset + limit]
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
