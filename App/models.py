@@ -20,6 +20,14 @@ class Product(models.Model):
         related_name="owned_products",
         null=True
     )
+    barcode = models.CharField(
+        max_length=100,
+        null=True,
+        blank=True,
+        unique=True,
+        db_index=True,
+        help_text="Barcode / UPC / product code"
+    )
 
     sku = models.CharField(max_length=64, unique=True)
     name = models.CharField(max_length=255)
