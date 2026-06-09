@@ -45,6 +45,18 @@ class ProductSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("SKU already exists. Try a different one.")
         return value
 
+    def validate_barcode(self, value):
+     if not value:
+        return value
+
+     qs = Product.objects.filter(barcode=value)
+     if getattr(self, 'instance', None):
+         qs = qs.exclude(pk=self.instance.pk)
+     if qs.exists():
+         raise serializers.ValidationError("This barcode is already assigned to another product.")
+     return value
+
+    
     def validate(self, data):
         """
         Volatile products:
