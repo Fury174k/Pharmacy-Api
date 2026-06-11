@@ -20,6 +20,8 @@ class Product(models.Model):
         related_name="owned_products",
         null=True
     )
+
+    sku = models.CharField(max_length=64, unique=True)
     barcode = models.CharField(
         max_length=100,
         null=True,
@@ -28,8 +30,6 @@ class Product(models.Model):
         db_index=True,
         help_text="Barcode / UPC / product code"
     )
-
-    sku = models.CharField(max_length=64, unique=True)
     name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
 
@@ -174,6 +174,14 @@ class Sale(models.Model):
         null=True,
         blank=True,
         help_text="Client-generated UUID for idempotent sync (offline deduplication)"
+    )
+
+    business_date = models.DateField(
+    null=True,
+    blank=True,
+    db_index=True,
+    help_text="Calendar date of the business day this sale belongs to (YYYY-MM-DD). "
+            "Set by the client at point of sale. Falls back to DATE(timestamp) if absent."
     )
     
     # OFFLINE-FIRST: Device/client that submitted this sale for audit & debugging
