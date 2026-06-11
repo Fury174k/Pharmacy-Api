@@ -46,17 +46,16 @@ class ProductSerializer(serializers.ModelSerializer):
         return value
 
     def validate_barcode(self, value):
-     if not value:
+        if not value:
+            return value
+
+        qs = Product.objects.filter(barcode=value)
+        if getattr(self, 'instance', None):
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError("This barcode is already assigned to another product.")
         return value
 
-     qs = Product.objects.filter(barcode=value)
-     if getattr(self, 'instance', None):
-         qs = qs.exclude(pk=self.instance.pk)
-     if qs.exists():
-         raise serializers.ValidationError("This barcode is already assigned to another product.")
-     return value
-
-    
     def validate(self, data):
         """
         Volatile products:
@@ -113,12 +112,13 @@ class SaleSerializer(serializers.ModelSerializer):
     external_id = serializers.UUIDField(required=False, allow_null=True, write_only=True)
     source_device = serializers.CharField(max_length=128, required=False, default='web', write_only=True)
     client_timestamp = serializers.DateTimeField(required=False, allow_null=True, write_only=True)
+    business_date = serializers.DateField(required=False, allow_null=True)
 
     class Meta:
         model = Sale
         fields = [
             'id', 'sold_by', 'total_amount', 'timestamp', 'synced_at',
-            'items', 'external_id', 'source_device', 'client_timestamp'
+            'items', 'external_id', 'source_device', 'client_timestamp', 'business_date'
         ]
         read_only_fields = ['sold_by', 'total_amount', 'timestamp', 'synced_at', 'id']
 
@@ -134,6 +134,7 @@ class SaleSerializer(serializers.ModelSerializer):
         5. Sync is idempotent (same external_id = no duplicate)
         """
         items_data = validated_data.pop('items')
+        business_date = validated_data.pop('business_date', None)
         user = self.context['request'].user
         
         # Extract offline-sync metadata
@@ -194,6 +195,7 @@ class SaleSerializer(serializers.ModelSerializer):
                     product=product,
                     quantity=quantity,
                     unit_price=unit_price,
+                    business_date=business_date or timezone.now().date(),
                 )
 
                 # Accumulate total server-side (never trust client total)
