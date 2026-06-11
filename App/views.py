@@ -10,7 +10,8 @@ from rest_framework import generics, permissions, status
 from django.db import transaction, models
 from django.db.models.functions import TruncDate, TruncWeek, TruncMonth
 from django.db.models import Sum, Count, Q, F
-from rest_framework.parsers import MultiPartParserfrom django.contrib.auth import authenticate
+from rest_framework.parsers import MultiPartParser
+from django.contrib.auth import authenticate
 from rest_framework.authtoken.models import Token
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes, parser_classes
