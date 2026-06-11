@@ -4,7 +4,7 @@ from .views import (
     StockMovementCreateView, SaleCreateView, sales_by_date, import_csv, 
     sales_trend, product_sales_analytics, ProductRetrieveUpdateDestroyView, 
     LowStockAlertListView, AlertHistoryView, AcknowledgeAlertView, 
-    AlertSettingsView, dashboard_summary, acknowledge_all_alerts
+    AlertSettingsView, dashboard_summary, acknowledge_all_alerts, SaleBatchSyncView, ProductByBarcodeView,
 )
 
 urlpatterns = [
@@ -13,13 +13,15 @@ urlpatterns = [
     path('logout/', logout_user, name='logout'),
     path('dashboard/', dashboard_summary, name='dashboard-summary'),
     path('products/', ProductListCreateView.as_view(), name='product-list-create'),
+    path('products/by_barcode/', ProductByBarcodeView.as_view(), name='product-by-barcode'),
     path('products/<int:pk>/', ProductRetrieveUpdateDestroyView.as_view(), name='product-detail'),
     path('stock-movements/', StockMovementCreateView.as_view(), name='stock-movement-create'),
-    path('sales/', SaleCreateView.as_view(), name='sales'),
+    path('sales/batch/', SaleBatchSyncView.as_view(), name='sale-batch-sync'),
     path('sales/by_date/', sales_by_date, name='sales-by-date'),
+    path('sales/trend/', sales_trend, name='sales_trend'),
+    path('sales/', SaleCreateView.as_view(), name='sales'),
     path('sales/analytics/', product_sales_analytics, name='product-sales-analytics'),
     path('products/import_csv/', import_csv, name='import_csv'),
-    path('sales/trend/', sales_trend, name='sales_trend'),
     path("alerts/low-stock/", LowStockAlertListView.as_view(), name="low_stock_alerts"),
     path('alerts/history/', AlertHistoryView.as_view(), name='alert-history'),
     path('alerts/acknowledge/', AcknowledgeAlertView.as_view(), name='alert-acknowledge'),
